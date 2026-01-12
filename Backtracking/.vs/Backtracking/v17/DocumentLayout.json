@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\Long\\Uni\\T\u1ED1i \u01B0u l\u1EADp k\u1EBF ho\u1EA1ch\\Backtracking\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|D:\\Long\\Uni\\T\u1ED1i \u01B0u l\u1EADp k\u1EBF ho\u1EA1ch\\Backtracking\\Backtracking.cpp||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|solutionrelative:Backtracking.cpp||{8B382828-6202-11D1-8870-0000F87579D2}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Backtracking.cpp",
+              "DocumentMoniker": "D:\\Long\\Uni\\T\u1ED1i \u01B0u l\u1EADp k\u1EBF ho\u1EA1ch\\Backtracking\\Backtracking.cpp",
+              "RelativeDocumentMoniker": "Backtracking.cpp",
+              "ToolTip": "D:\\Long\\Uni\\T\u1ED1i \u01B0u l\u1EADp k\u1EBF ho\u1EA1ch\\Backtracking\\Backtracking.cpp",
+              "RelativeToolTip": "Backtracking.cpp",
+              "ViewState": "AgIAABEAAAAAAAAAAAAAAA0AAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2025-10-06T16:04:29.456Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
