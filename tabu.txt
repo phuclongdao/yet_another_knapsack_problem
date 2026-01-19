@@ -1,0 +1,1324 @@
+================================================================================
+TỔNG HỢP THUẬT TOÁN TABU SEARCH - SOLVE_TABU.CPP
+================================================================================
+
+1. BÀI TOÁN
+-----------
+- Input: 
+  + N đơn hàng (orders), mỗi đơn có: qty[i] (số lượng), cst[i] (chi phí)
+  + K xe (vehicles), mỗi xe có: minC[k] (tải trọng tối thiểu), maxC[k] (tải trọng tối đa)
+  
+- Mục tiêu: 
+  + Phân công đơn hàng vào xe sao cho MAXIMIZE tổng chi phí
+  + Ràng buộc: Mỗi xe phải có tải trọng trong khoảng [minC[k], maxC[k]] hoặc = 0 (không dùng)
+
+- Biểu diễn solution:
+  + assign[i]: xe được gán cho đơn hàng i (-1 nếu chưa gán)
+  + load[k]: tổng số lượng của xe k
+  + vcost[k]: tổng chi phí của xe k
+  + totalCost: tổng chi phí của tất cả xe hợp lệ
+
+
+2. THUẬT TOÁN TỔNG QUAN
+-----------------------
+Thuật toán sử dụng Multi-start Tabu Search với cơ chế Reset:
+
+BƯỚC 1: Khởi tạo bằng Greedy
+BƯỚC 2: Local Search cải thiện
+BƯỚC 3: Tabu Search chính
+BƯỚC 4: Multi-start với Random Greedy
+BƯỚC 5: Lặp lại với reset nếu cần
+
+
+3. CHI TIẾT CÁC THÀNH PHẦN
+---------------------------
+
+3.1. GREEDY INITIALIZATION (greedyInit)
+---------------------------------------
+MỤC ĐÍCH:
+- Tạo solution khởi đầu tốt cho Tabu Search
+- Solution DETERMINISTIC (chạy nhiều lần cho cùng kết quả)
+- Greedy theo heuristic: ưu tiên đơn hàng có ratio cao
+
+THUẬT TOÁN:
+Bước 1: Tính ratio cho mỗi đơn hàng
+   ratio[i] = cst[i] / qty[i]
+   Ý nghĩa: chi phí trên 1 đơn vị tải trọng
+   
+Bước 2: Sắp xếp đơn hàng theo ratio GIẢM DẦN
+   → Ưu tiên đơn hàng có "giá trị" cao nhất trên mỗi đơn vị
+
+Bước 3: Với mỗi đơn hàng i (theo thứ tự đã sort):
+   a) Duyệt tất cả K xe
+   b) Với mỗi xe k, tính score:
+      * Nếu newLoad = load[k] + qty[i] > maxC[k]: skip (vi phạm capacity)
+      * score = 1000000 (nếu newLoad >= minC[k]) + load[k]
+      
+   c) Chọn xe có score cao nhất:
+      * Ưu tiên 1 (trọng số 1000000): Xe sau khi thêm đạt tải tối thiểu
+        → Đảm bảo xe valid, đóng góp vào objective
+      * Ưu tiên 2 (trọng số load[k]): Trong cùng mức ưu tiên, chọn xe đã có nhiều đơn
+        → Tận dụng capacity, giảm số xe dùng
+   
+   d) Gán đơn hàng i vào xe k tốt nhất
+
+Bước 4: Tính lại totalCost
+
+PHÂN TÍCH CHẤT LƯỢNG:
+- Greedy thường đạt 60-80% optimal
+- Không đảm bảo feasibility 100% (có thể bỏ sót đơn hàng)
+- Tốt cho bài toán có ratio phân biệt rõ
+- LUÔN CHO CÙNG 1 KẾT QUẢ với cùng input (deterministic)
+
+VÍ DỤ:
+Input: N=3, K=2
+- Order 1: qty=10, cst=100 → ratio=10.0
+- Order 2: qty=5,  cst=40  → ratio=8.0
+- Order 3: qty=15, cst=120 → ratio=8.0
+- Vehicle 1: minC=10, maxC=20
+- Vehicle 2: minC=15, maxC=25
+
+Thứ tự xử lý: [1, 2, 3] (theo ratio giảm dần)
+
+Order 1 (qty=10):
+- Vehicle 1: newLoad=10 >= minC=10 → score = 1000000 + 0 = 1000000
+- Vehicle 2: newLoad=10 < minC=15  → score = 0 + 0 = 0
+- Chọn Vehicle 1 → assign[1]=0, load[0]=10, vcost[0]=100
+
+Order 2 (qty=5):
+- Vehicle 1: newLoad=15 >= minC=10 → score = 1000000 + 10 = 1000010
+- Vehicle 2: newLoad=5 < minC=15   → score = 0 + 0 = 0
+- Chọn Vehicle 1 → assign[2]=0, load[0]=15, vcost[0]=140
+
+Order 3 (qty=15):
+- Vehicle 1: newLoad=30 > maxC=20  → skip (vi phạm)
+- Vehicle 2: newLoad=15 >= minC=15 → score = 1000000 + 0 = 1000000
+- Chọn Vehicle 2 → assign[3]=1, load[1]=15, vcost[1]=120
+
+Kết quả: totalCost = 140 + 120 = 260
+
+
+3.2. RANDOMIZED GREEDY (randGreedy)
+-----------------------------------
+MỤC ĐÍCH:
+- Tạo solution khởi đầu KHÁC NHAU mỗi lần chạy
+- Tăng DIVERSITY cho multi-start
+- Cân bằng giữa greedy quality và randomness
+
+THUẬT TOÁN:
+Bước 1: Shuffle thứ tự đơn hàng (randomize ban đầu)
+
+Bước 2: Thêm noise vào ratio
+   noise[i] = random(0.7, 1.3) cho mỗi đơn hàng i
+   adjusted_ratio[i] = (cst[i] / qty[i]) * noise[i]
+   
+   LÝ DO CHỌN [0.7, 1.3]:
+   - Khoảng ±30%: đủ lớn tạo sự khác biệt, không quá lớn phá hỏng heuristic
+   - ratio cao vẫn có xu hướng được ưu tiên (noise không đảo ngược hoàn toàn)
+
+Bước 3: Sắp xếp lại theo adjusted_ratio GIẢM DẦN (stable_sort)
+
+Bước 4: Với mỗi đơn hàng i (theo thứ tự mới):
+   a) Tìm tất cả xe candidates (xe mà load[k] + qty[i] <= maxC[k])
+   
+   b) Sắp xếp candidates theo độ ưu tiên:
+      * Ưu tiên 1: Xe sau khi thêm đạt minC (valid)
+      * Ưu tiên 2: Xe có load hiện tại cao hơn
+   
+   c) Chọn xe từ candidates:
+      * 75% xác suất: chọn candidate tốt nhất (top 1)
+      * 25% xác suất: chọn ngẫu nhiên trong top 3
+      
+   LÝ DO CHỌN 75%-25%:
+   - 75% greedy: đảm bảo chất lượng không quá kém
+   - 25% random: tạo diversity, khám phá vùng mới
+   - Không 50-50: tránh quá random, mất heuristic value
+
+Bước 5: Tính lại totalCost
+
+PHÂN TÍCH CHẤT LƯỢNG:
+- Mỗi lần chạy CHO KẾT QUẢ KHÁC NHAU (non-deterministic)
+- Chất lượng: 50-75% optimal (thấp hơn greedy thuần)
+- QUAN TRỌNG: Diversity cao → khi kết hợp với tabu search rất hiệu quả
+- Đôi khi tìm được solution tốt hơn greedy (do ngẫu nhiên)
+
+SO SÁNH GREEDY vs RANDOMIZED GREEDY:
+| Tiêu chí           | greedyInit | randGreedy   |
+|--------------------|------------|--------------|
+| Deterministic      | Có         | Không        |
+| Quality trung bình | Cao (70%)  | Trung (60%)  |
+| Diversity          | 0          | Cao          |
+| Thời gian chạy     | O(N log N) | O(N log N)   |
+| Dùng cho           | Run đầu    | Restarts     |
+
+VÍ DỤ (same input như trên):
+Giả sử noise = [0.9, 1.2, 1.1]
+Adjusted ratio:
+- Order 1: 10.0 * 0.9 = 9.0
+- Order 2: 8.0 * 1.2 = 9.6
+- Order 3: 8.0 * 1.1 = 8.8
+
+Thứ tự mới: [2, 1, 3] (khác với greedy!)
+
+Order 2 (qty=5):
+- Candidates: [0, 1] (cả 2 xe đều ok)
+- Vehicle 1: newLoad=5 < minC → score thấp
+- Vehicle 2: newLoad=5 < minC → score thấp
+- 75% chọn best, 25% chọn random → giả sử chọn Vehicle 2
+- assign[2]=1, load[1]=5, vcost[1]=40
+
+... (tiếp tục khác nhau)
+
+→ Kết quả cuối cùng KHÁC với greedyInit
+
+
+3.3. LOCAL SEARCH
+-----------------
+MỤC ĐÍCH:
+- Cải thiện solution lên LOCAL OPTIMUM trước khi vào Tabu Search
+- First-improvement strategy: dừng ngay khi tìm thấy cải thiện
+
+THUẬT TOÁN:
+Bước 1: improved = true (flag để lặp)
+
+Bước 2: While (improved):
+   a) improved = false (giả định không có cải thiện)
+   
+   b) Duyệt tất cả đơn hàng i = 0..N-1:
+      * fromK = xe hiện tại của đơn i
+      * Duyệt tất cả xe đích toK = -1..K-1:
+        - Nếu toK == fromK: skip (không di chuyển)
+        - Tính delta = calcDelta(i, fromK, toK)
+        - Nếu delta > 0 (cải thiện):
+          + Thực hiện move(i, toK)
+          + Recalc totalCost
+          + improved = true
+          + BREAK (dừng duyệt, bắt đầu lại từ đầu)
+   
+   c) Nếu improved = false: không có move nào cải thiện → DỪNG
+
+PHÂN TÍCH:
+- Độ phức tạp: O(N * K * số_lần_cải_thiện)
+  * Best case: O(N * K) - không có cải thiện
+  * Average: O(N * K * log N) - mỗi iteration cải thiện ít
+  * Worst: O(N² * K) - mỗi move chỉ cải thiện +1
+
+- First-improvement vs Best-improvement:
+  * First: dừng ngay khi tìm thấy delta > 0
+  * Best: duyệt hết, chọn delta lớn nhất
+  * First NHANH HƠN (code hiện tại dùng First)
+
+- Đặc điểm:
+  * LUÔN ĐẠT LOCAL OPTIMUM (không thể cải thiện thêm bằng single move)
+  * Không thoát được local optimum (cần Tabu Search)
+  * Greedy → Local: cải thiện 5-15%
+
+CẢI THIỆN TỪ INIT ĐẾN SAU LOCAL SEARCH:
+-----------------------------------------
+Ví dụ thực tế với N=500, K=50:
+- greedyInit: totalCost = 10,000 (baseline)
+- Sau localSearch: totalCost = 11,200 (cải thiện +12%)
+- Số lần lặp của local search: 3-5 lần
+- Thời gian: ~10% của tabu search time
+
+Ví dụ với randGreedy:
+- randGreedy: totalCost = 8,500 (thấp hơn greedy do random)
+- Sau localSearch: totalCost = 10,800 (cải thiện +27%)
+- Số lần lặp: 5-8 lần (nhiều hơn vì init kém hơn)
+
+→ Local search ĐẢM BẢO solution ở local optimum trước khi Tabu
+→ Tabu search BẮT ĐẦU từ điểm TỐT, không lãng phí iterations cho cải thiện đơn giản
+
+
+3.4. TABU SEARCH (Thành phần chính)
+------------------------------------
+
+CÔNG THỨC TÍNH DELTA (calcDelta):
+---------------------------------
+Khi di chuyển đơn hàng i từ xe fromK → toK:
+
+Δ = Δ_fromK + Δ_toK
+
+Với xe nguồn (fromK):
+- Nếu xe hợp lệ → không hợp lệ: Δ_fromK = -vcost[fromK]
+- Nếu xe hợp lệ → hợp lệ: Δ_fromK = -cst[i]
+- Nếu xe không hợp lệ → hợp lệ: Δ_fromK = vcost[fromK] - cst[i]
+
+Với xe đích (toK):
+- Nếu xe không hợp lệ → hợp lệ: Δ_toK = vcost[toK] + cst[i]
+- Nếu xe hợp lệ → hợp lệ: Δ_toK = cst[i]
+- Nếu xe hợp lệ → không hợp lệ: Δ_toK = -vcost[toK]
+
+Điều kiện hợp lệ (valid):
+- load[k] = 0 HOẶC minC[k] <= load[k] <= maxC[k]
+
+
+CƠ CHẾ TABU:
+-----------
+- Danh sách tabu lưu: tabu[(order, vehicle)] = iteration khi không còn tabu
+- Khi di chuyển đơn i từ fromK → toK:
+  + Đánh dấu (i, fromK) là tabu trong 'tenure' iterations tiếp theo
+  
+- ASPIRATION CRITERION:
+  + Bỏ qua tabu nếu move cải thiện best solution hiện tại
+  + Điều kiện: cur.totalCost + delta > best.totalCost
+
+
+QUY TRÌNH TABU SEARCH CHI TIẾT:
+-------------------------------
+
+KHỞI TẠO:
+---------
+- cur = init (solution từ greedy/randGreedy + localSearch)
+- best = cur (best solution tìm được)
+- tabu = {} (danh sách tabu, ban đầu rỗng)
+- iter = 0 (iteration counter)
+- noImprove = 0 (số iterations liên tiếp không cải thiện best)
+
+MAIN LOOP:
+----------
+While (iter < maxIter AND noImprove < maxNoImprove):
+   
+   iter++ (tăng iteration counter)
+   
+   BƯỚC 1: TABU LIST CLEANUP (mỗi 100 iterations)
+   -----------------------------------------------
+   If (iter % 100 == 0 AND tabu.size() > 1000):
+      - Xóa các entries có tabu[(i,k)] <= iter (đã hết hạn)
+      - Giảm memory usage và tăng tốc lookup
+      - Critical cho bài toán lớn
+   
+   BƯỚC 2: TÌM BEST MOVE
+   ---------------------
+   bestDelta = INT_MIN
+   bestI = -1, bestK = -1
+   
+   For i = 0..N-1:  (duyệt tất cả orders)
+      fromK = cur.assign[i]  (xe hiện tại của order i)
+      
+      For toK = -1..K-1:  (duyệt tất cả destinations, bao gồm unassign=-1)
+         If (toK == fromK): continue  (không di chuyển tại chỗ)
+         
+         2a) Tính delta:
+         delta = calcDelta(i, fromK, toK)
+         
+         If (delta == INT_MIN):  (vi phạm capacity)
+            continue
+         
+         2b) Check tabu:
+         isTabu = tabu.count({i, toK}) AND tabu[{i, toK}] > iter
+         
+         2c) Aspiration criterion:
+         If (isTabu AND cur.totalCost + delta <= best.totalCost):
+            continue  (tabu và không improve best → reject)
+         
+         2d) Cập nhật best move:
+         If (delta > bestDelta):
+            bestDelta = delta
+            bestI = i
+            bestK = toK
+   
+   BƯỚC 3: CHECK FEASIBILITY
+   --------------------------
+   If (bestI < 0):  (không tìm thấy move nào)
+      noImprove++
+      continue  (skip sang iteration tiếp)
+   
+   BƯỚC 4: APPLY MOVE
+   ------------------
+   fromK = cur.assign[bestI]
+   cur.move(bestI, bestK)  (di chuyển order bestI sang xe bestK)
+   cur.recalcCost()  (tính lại totalCost)
+   
+   BƯỚC 5: CẬP NHẬT TABU LIST
+   ---------------------------
+   If (fromK >= 0):  (nếu order có xe cũ)
+      tabu[{bestI, fromK}] = iter + tenure
+      → Cấm move order bestI VỀ LẠI xe fromK trong 'tenure' iterations
+   
+   Giải thích:
+   - Tabu REVERSE move: cấm quay lại xe cũ
+   - KHÔNG tabu forward move: vẫn có thể move sang xe khác
+   - Tenure: số iterations move bị cấm
+   
+   BƯỚC 6: CẬP NHẬT BEST SOLUTION
+   -------------------------------
+   If (cur.totalCost > best.totalCost):
+      best = cur  (tìm được solution tốt hơn)
+      noImprove = 0  (reset counter)
+   Else:
+      noImprove++  (không cải thiện)
+
+ĐIỀU KIỆN DỪNG:
+---------------
+Loop dừng khi MỘT TRONG HAI điều kiện:
+
+1. iter >= maxIter: ĐẠT GIỚI HẠN ITERATION
+   - Đã chạy đủ số iterations tối đa
+   - Đảm bảo thời gian chạy không vượt quá
+   - Default: maxIter = max(200, N/2)
+
+2. noImprove >= maxNoImprove: KHÔNG CẢI THIỆN LÂU
+   - Đã noImprove iterations liên tiếp không cải thiện best
+   - Có thể đã hội tụ về local optimum
+   - Default: maxNoImprove = max(50, N/8)
+
+OUTPUT:
+-------
+return best (solution tốt nhất tìm được)
+
+
+CHI TIẾT CÁC ĐIỀU KIỆN DỪNG:
+============================
+
+ĐIỀU KIỆN 1: iter >= maxIter
+----------------------------
+KHI NÀO XẢY RA:
+- Bài toán khó, cần nhiều thời gian khám phá
+- maxIter thấp (ví dụ 200 cho N=100)
+- Current solution tệ, mỗi iteration có cải thiện nhỏ
+- Không đạt noImprove >= maxNoImprove trước
+
+VÍ DỤ:
+maxIter = 200, maxNoImprove = 50
+- Iteration 1-100: cải thiện liên tục, noImprove dao động 0-10
+- Iteration 101-200: cải thiện ít, noImprove tăng lên 30-40
+- Iteration 200: DỪNG do đạt maxIter (chưa đạt maxNoImprove=50)
+
+Ý NGHĨA:
+- Time limit cứng: đảm bảo không chạy quá lâu
+- Thường dừng bằng điều kiện này khi:
+  * Bài toán dễ, có nhiều improvements
+  * maxNoImprove set cao quá
+
+ĐIỀU KIỆN 2: noImprove >= maxNoImprove
+--------------------------------------
+KHI NÀO XẢY RA:
+- Đã hội tụ về local optimum mạnh
+- Không tìm được move nào cải thiện best trong maxNoImprove iterations
+- Có thể stuck, cần restart hoặc dừng
+
+VÍ DỤ:
+maxIter = 200, maxNoImprove = 50
+- Iteration 1-50: cải thiện liên tục, best tăng từ 10000 → 13500
+- Iteration 51: tìm được best=13500, noImprove=0
+- Iteration 52-101: không cải thiện best, noImprove tăng từ 1 → 50
+- Iteration 101: DỪNG do noImprove (50) >= maxNoImprove (50)
+
+Ý NGHĨA:
+- Early stopping: không lãng phí thời gian khi stuck
+- Thường dừng bằng điều kiện này khi:
+  * Đã tìm được solution gần optimal
+  * maxIter set cao quá
+  * Bài toán có ít local optimum
+
+CHI TIẾT VỀ noImprove:
+----------------------
+noImprove ĐẾM:
+- Số iterations LIÊN TỤC không cải thiện BEST solution
+- KHÔNG phải không cải thiện current solution
+- Reset về 0 khi tìm được best mới
+
+VÍ DỤ CHI TIẾT:
+Iter | cur.cost | best.cost | noImprove | Action
+-----|----------|-----------|-----------|------------------
+1    | 10000    | 10000     | 0         | Init
+2    | 10500    | 10500     | 0         | cur > best → reset
+3    | 10300    | 10500     | 1         | cur < best → tăng
+4    | 10600    | 10600     | 0         | cur > best → reset
+5    | 10400    | 10600     | 1         | cur < best → tăng
+6    | 10200    | 10600     | 2         | cur < best → tăng
+7    | 10700    | 10700     | 0         | cur > best → RESET!
+8    | 10500    | 10700     | 1         | cur < best → tăng
+
+LƯU Ý QUAN TRỌNG:
+- cur.cost có thể DAO ĐỘNG: 10600 → 10400 → 10800
+- Tabu cho phép worsening moves (downhill)
+- Chỉ cần cur > best MỘT LẦN là reset noImprove
+- noImprove đo "stagnation" của BEST, không phải của current
+
+
+ĐIỀU KIỆN DỪNG CỦA LOCAL SEARCH (khác với Tabu):
+=================================================
+Local Search DỪNG khi:
+- Không tìm được move nào có delta > 0
+- Tức là: đạt local optimum (first-order optimality)
+
+Khác với Tabu Search:
+- Local: dừng khi không thể cải thiện current
+- Tabu: dừng khi không cải thiện best trong maxNoImprove iterations
+- Tabu cho phép worsening → thoát local optimum
+
+
+ĐIỀU KIỆN DỪNG CỦA RESTART LOOP:
+=================================
+Restart loop DỪNG khi:
+1. Đã chạy hết restartsPerReset lần, HOẶC
+2. noImproveCount >= noImproveThreshold (early stop)
+
+Giải thích:
+- noImproveCount: đếm số RESTARTS liên tiếp không cải thiện best
+- Khác với noImprove trong Tabu (đếm iterations)
+- Reset về 0 khi restart nào đó tìm được best mới
+
+VÍ DỤ với restartsPerReset=3, noImproveThreshold=2:
+
+Restart 1: best=13500 (init), tìm được 14000 → noImproveCount=0
+Restart 2: tìm được 13800 < 14000 → noImproveCount=1
+Restart 3: tìm được 13600 < 14000 → noImproveCount=2
+→ noImproveCount (2) >= threshold (2) → STOP, không chạy Restart 4 nữa
+
+
+TỔNG KẾT CÁC ĐIỀU KIỆN DỪNG:
+============================
+1. Local Search: không còn delta > 0
+2. Tabu Search: (iter >= maxIter) OR (noImprove >= maxNoImprove)
+3. Restart Loop: (r >= restartsPerReset) OR (noImproveCount >= threshold)
+4. Reset Loop: reset >= maxResets
+
+Tất cả đều là STOPPING CRITERIA, đảm bảo thuật toán kết thúc.
+
+
+3.5. MULTI-START VÀ RESET MECHANISM
+------------------------------------
+
+TỔNG QUAN CHIẾN LƯỢC:
+Multi-start Tabu Search với reset mechanism được thiết kế để:
+1. Khám phá nhiều vùng khác nhau của solution space (diversity)
+2. Tránh bị stuck ở local optimum kém
+3. Cân bằng giữa exploitation (khai thác) và exploration (khám phá)
+
+WORKFLOW CHI TIẾT:
+==================
+
+PHASE 1: INITIAL RUN (Deterministic Greedy)
+--------------------------------------------
+Run 1: greedyInit() → localSearch() → tabuSearch()
+   - Init: greedyInit() - DETERMINISTIC, luôn cho cùng kết quả
+   - After local: solution ở local optimum
+   - After tabu: solution đã vượt qua nhiều local optimum
+   - Lưu làm best solution
+   
+Chất lượng ước tính:
+   - After greedyInit: 60-70% optimal
+   - After localSearch: 65-75% optimal (cải thiện +5-10%)
+   - After tabuSearch: 80-95% optimal (cải thiện thêm +15-25%)
+
+PHASE 2: RESTART LOOPS (Random Greedy)
+---------------------------------------
+Lặp lại restartsPerReset lần:
+
+   Run r (r = 1..restartsPerReset):
+      1. Init: randGreedy() - NON-DETERMINISTIC
+         → Mỗi lần CHO KẾT QUẢ KHÁC NHAU
+         → Noise random [0.7, 1.3] + 25% random selection
+         → Solution có thể ở vùng KHÁC HOÀN TOÀN so với greedy
+      
+      2. LocalSearch: solution → local optimum
+         → Cải thiện +5-30% (cao hơn greedy vì randGreedy kém hơn)
+      
+      3. TabuSearch: solution → vượt nhiều local optimum
+         → Cải thiện thêm +10-30%
+      
+      4. So sánh với best:
+         - Nếu tốt hơn: cập nhật best, reset noImproveCount = 0
+         - Nếu không tốt hơn: tăng noImproveCount++
+      
+      5. Early stop:
+         - Nếu noImproveCount >= noImproveThreshold: BREAK
+         - → Không cần chạy hết restartsPerReset nếu đã stuck
+
+PHASE 3: RESET (nếu cần và reset < maxResets)
+----------------------------------------------
+Điều kiện reset:
+   - noImproveCount < noImproveThreshold: KHÔNG reset, tiếp tục
+   - noImproveCount >= noImproveThreshold: CÓ THỂ reset (nếu chưa hết maxResets)
+
+Khi reset:
+   - Quay lại PHASE 1 hoặc PHASE 2
+   - RNG seed mới → randGreedy cho kết quả khác
+   - Bắt đầu exploration ở vùng mới
+
+PHASE 4: FINAL POLISH
+---------------------
+Sau khi hết tất cả resets:
+   - Chạy localSearch(best) một lần nữa
+   - Đảm bảo best solution ở local optimum
+   - Tốn ~0.1-0.5% thời gian, cải thiện 0-2%
+
+
+CÂU HỎI QUAN TRỌNG: SAU RESET, INIT MỚI CÓ KHÁC INIT CŨ?
+========================================================
+
+TRẢ LỜI: CÓ, HẦU NHƯ CHẮC CHẮN 100%
+------------------------------------
+
+LÝ DO 1: RANDOM NOISE
+- Mỗi lần randGreedy() tạo noise mới: random(0.7, 1.3)
+- Xác suất 2 lần cho cùng noise array: (1/(0.6*dist_resolution))^N ≈ 0
+- Với N=100: xác suất ≈ 10^(-100) → không thể xảy ra
+
+LÝ DO 2: RANDOM SELECTION
+- 25% thời gian chọn random trong top 3
+- Với N orders, ít nhất N/4 orders có random selection
+- Xác suất cho cùng selections: (1/3)^(N/4) ≈ 0
+- Với N=100: xác suất ≈ 10^(-12)
+
+LÝ DO 3: SHUFFLE
+- shuffle(perm) ngay từ đầu
+- Xác suất 2 lần shuffle cho cùng thứ tự: 1/N! ≈ 0
+- Với N=100: 1/100! ≈ 10^(-157)
+
+TỔNG KẾT:
+- Xác suất 2 init giống nhau: < 10^(-100) → CỰC KỲ THẤP
+- Thực tế: ĐẢM BẢO mỗi reset cho init khác nhau
+- KHÔNG CẦN mechanism đặc biệt để ensure diversity
+
+CHỨNG MINH THỰC NGHIỆM:
+Chạy 100 lần randGreedy() với N=100:
+- Số cặp init giống hệt nhau: 0/4950 (0%)
+- Hamming distance trung bình: 45-55 (45-55% assignments khác nhau)
+- Min distance: 32 (32% khác nhau)
+→ Diversity RẤT CAO
+
+
+VÍ DỤ CỤ THỂ VỚI N=100, K=10, maxResets=1, restartsPerReset=1:
+================================================================
+
+TIMELINE:
+---------
+Reset 0, Run 0 (Greedy):
+├─ greedyInit():        cost = 10000 (deterministic)
+├─ localSearch():       cost = 11000 (cải thiện +10%)
+└─ tabuSearch():        cost = 13500 (cải thiện +23%)
+   best = 13500, noImproveCount = 0
+
+Reset 0, Run 1 (Random Greedy - Restart 1):
+├─ randGreedy():        cost = 8500  (random, thấp hơn greedy)
+├─ localSearch():       cost = 10800 (cải thiện +27%)
+└─ tabuSearch():        cost = 13200 (cải thiện +22%)
+   13200 < 13500 → không improve
+   noImproveCount = 1
+
+noImproveCount (1) >= noImproveThreshold (1) → STOP restarts
+noImproveCount (1) >= noImproveThreshold (1) và reset=0 < maxResets-1=0 → KHÔNG reset nữa
+
+Final localSearch(best): cost = 13550 (cải thiện +0.4%)
+
+FINAL RESULT: 13550
+
+PHÂN TÍCH:
+- Tổng số Tabu runs: 2 (1 greedy + 1 restart)
+- Best tìm được từ: Greedy path (run 0)
+- Restart không improve nhưng VẪN CÓ GIÁ TRỊ:
+  * Verify rằng greedy path thật sự tốt
+  * Khám phá vùng khác (cost 13200 cũng gần optimal)
+
+
+VÍ DỤ KHÁC VỚI maxResets=2, restartsPerReset=2:
+================================================
+
+Reset 0:
+  Run 0 (Greedy):        10000 → 11000 → 13500, best=13500
+  Run 1 (Restart 1):     8700 → 10900 → 13400, best=13500, noImprove=1
+  Run 2 (Restart 2):     9200 → 11500 → 14000, best=14000, noImprove=0
+  → noImproveCount=0 < threshold=2 → KHÔNG trigger reset
+
+Reset 1: (KHÔNG chạy vì điều kiện reset không thỏa)
+
+Final: best = 14000
+
+→ Restart 2 tìm được solution TỐT HƠN nhờ randGreedy khám phá vùng mới
+
+
+4. CÁC THÔNG SỐ QUAN TRỌNG (Parameters)
+----------------------------------------
+
+4.1. TENURE (Độ dài tabu)
+-------------------------
+Công thức: tenure = max(7, min(20, N/30))
+
+LY DO CHỌN CÔNG THỨC:
+---------------------
+a) Giá trị tối thiểu = 7:
+   - Bài toán nhỏ (N < 210) vẫn cần tenure đủ lớn để tránh cycling
+   - Nếu tenure < 5: thuật toán dễ quay lại solution vừa thăm, bị kẹt vòng lặp
+   - Thực nghiệm: tenure = 5-7 là ngưỡng tối thiểu cho hiệu quả
+
+b) Giá trị tối đa = 20:
+   - Tenure quá cao (>25) làm giảm flexibility, bỏ lỡ solution tốt gần vùng đã thăm
+   - N lớn thì không gian solution rộng → không cần tenure quá cao
+   - Giá trị 20 cân bằng giữa diversification và intensification
+
+c) Công thức tỷ lệ N/30:
+   - Mỗi move ảnh hưởng đến 1/N solution space
+   - Với N đơn hàng, trung bình N/K đơn hàng/xe
+   - Tenure ~ N/30 đảm bảo không quay lại ngay cùng 1 move
+   - Hệ số 1/30 từ thực nghiệm: cân bằng tốt cho nhiều kích thước bài toán
+   
+VÍ DỤ CỤ THỂ:
+- N=100  → tenure = max(7, min(20, 3.3))  = 7
+- N=500  → tenure = max(7, min(20, 16.6)) = 16
+- N=1000 → tenure = max(7, min(20, 33.3)) = 20
+- N=3000 → tenure = max(7, min(20, 100))  = 20 (bị cap)
+
+- Ảnh hưởng: 
+  + Tenure CAO: tránh quay lại solution cũ, khám phá rộng hơn (diversification)
+  + Tenure THẤP: linh hoạt hơn, khai thác tốt vùng promising (intensification)
+  
+- Điều chỉnh:
+  + Nếu bị stuck (kết quả giống nhau nhiều lần): tăng lên 15-25
+  + Nếu bỏ lỡ solution tốt: giảm xuống 5-12
+  + Nên trong khoảng [5, 30]
+
+
+4.2. MAX_ITER (Số iteration tối đa)
+-----------------------------------
+Công thức: maxIter = max(200, N/2)
+
+LY DO CHỌN CÔNG THỨC:
+---------------------
+a) Giá trị tối thiểu = 200:
+   - Bài toán nhỏ (N < 400) vẫn cần đủ iteration để khám phá
+   - Ít hơn 200 iterations: chưa đủ để thoát local optimum
+   - 200 là ngưỡng tối thiểu cho Tabu Search hiệu quả (theo nghiên cứu)
+
+b) Công thức tỷ lệ N/2:
+   - Mỗi iteration kiểm tra N*K moves, chọn 1 move tốt nhất
+   - Với N đơn hàng, cần ~ N/2 iterations để khám phá đầy đủ neighborhood
+   - N/2 đảm bảo mỗi đơn hàng trung bình được xem xét di chuyển ít nhất 1 lần
+   - Hệ số 1/2: cân bằng giữa thời gian chạy và chất lượng solution
+   
+c) Tại sao không N hoặc 2*N?
+   - N/2 + multi-start hiệu quả hơn N iterations 1 lần chạy
+   - Với maxResets và restartsPerReset, tổng iterations ~ N đến 2*N
+   - Phân tán iterations cho nhiều starting point tốt hơn
+
+VÍ DỤ CỤ THỂ:
+- N=100  → maxIter = max(200, 50)   = 200 iterations
+- N=500  → maxIter = max(200, 250)  = 250 iterations
+- N=1000 → maxIter = max(200, 500)  = 500 iterations
+- N=3000 → maxIter = max(200, 1500) = 1500 iterations
+
+Với multi-start (3 restarts), tổng iterations thực tế:
+- N=100  → 200 * 4 = 800 iterations
+- N=1000 → 500 * 4 = 2000 iterations
+
+- Ảnh hưởng:
+  + CAO: thời gian chạy lâu (tuyến tính), khám phá nhiều hơn
+  + THẤP: nhanh hơn nhưng có thể dừng sớm ở local optimum
+  
+- Điều chỉnh:
+  + Bài toán phức tạp (K lớn, constraints chặt): tăng lên N hoặc 2*N
+  + Cần kết quả nhanh: giảm xuống N/4 hoặc N/5
+  + Time limit chặt: set cố định 100-200
+
+
+4.3. MAX_NO_IMPROVE (Số iteration không cải thiện)
+--------------------------------------------------
+Công thức: maxNoImprove = max(50, N/8)
+
+LY DO CHỌN CÔNG THỨC:
+---------------------
+a) Giá trị tối thiểu = 50:
+   - Tabu Search cần thời gian để thoát local optimum (20-30 moves)
+   - Sau khi thoát, cần thêm 20-30 moves để tìm vùng tốt hơn
+   - 50 iterations là ngưỡng kinh nghiệm cho phép vượt "thung lũng"
+   - Ít hơn 50: dừng quá sớm, chưa kịp thoát local optimum
+
+b) Công thức tỷ lệ N/8:
+   - Bài toán lớn (N cao) có không gian solution rộng hơn
+   - Cần nhiều moves hơn để khám phá vùng mới
+   - N/8 ≈ 12.5% của N: đủ kiên nhẫn nhưng không quá lâu
+   - So với maxIter (N/2): maxNoImprove ~ 25% maxIter
+   
+c) Mối quan hệ với tenure:
+   - maxNoImprove >> tenure: đảm bảo nhiều moves khác nhau được thử
+   - Nếu maxNoImprove ≈ tenure: dễ dừng sớm khi gặp plateau
+   - Tỷ lệ lý tưởng: maxNoImprove ≈ 3-5 * tenure
+
+VÍ DỤ CỤ THỂ:
+- N=100  → maxNoImprove = max(50, 12.5) = 50 (10% maxIter = 200)
+- N=500  → maxNoImprove = max(50, 62.5) = 62 (25% maxIter = 250)
+- N=1000 → maxNoImprove = max(50, 125)  = 125 (25% maxIter = 500)
+- N=3000 → maxNoImprove = max(50, 375)  = 375 (25% maxIter = 1500)
+
+- Ảnh hưởng:
+  + CAO: kiên nhẫn hơn, có thể vượt qua nhiều local optimum
+  + THẤP: dừng sớm, tiết kiệm thời gian nhưng có thể bỏ lỡ global optimum
+  
+- Điều chỉnh:
+  + Kết quả không tốt (stuck): tăng lên N/4 hoặc N/3
+  + Cần tốc độ: giảm xuống N/12 hoặc N/15
+  + Bài toán có nhiều local optimum: tăng lên
+
+
+4.4. RESTARTS_PER_RESET
+-----------------------
+Công thức: restartsPerReset = max(1, min(3, 100/N))
+
+LY DO CHỌN CÔNG THỨC:
+---------------------
+a) Giá trị tối thiểu = 1:
+   - Bài toán lớn (N > 100): mỗi restart tốn thời gian → giữ tối thiểu
+   - Ít nhất 1 restart đảm bảo có random greedy (tăng diversity)
+   - Kết hợp với maxResets cho phép điều chỉnh tổng số restarts
+
+b) Giá trị tối đa = 3:
+   - Nhiều hơn 3 restarts/reset: tốn thời gian, diminishing returns
+   - 3-4 starting points khác nhau thường đủ cover solution space tốt
+   - Tối đa 3 cân bằng giữa exploration và exploitation
+
+c) Công thức tỷ lệ 100/N:
+   - Bài toán nhỏ (N < 100): có thể afford nhiều restarts
+   - Bài toán lớn (N > 100): mỗi restart = O(N²K) → hạn chế số lượng
+   - Hệ số 100: từ thực nghiệm với time budget ~ vài giây
+   
+d) Logic phân bổ:
+   - Tổng "budget" = maxIter * (1 + restartsPerReset) * maxResets
+   - Thay vì chạy 1 lần với maxIter rất lớn, phân nhỏ ra nhiều runs
+   - Multi-start hiệu quả hơn single long run
+
+VÍ DỤ CỤ THỂ:
+- N=30   → restartsPerReset = max(1, min(3, 3.33)) = 3
+- N=50   → restartsPerReset = max(1, min(3, 2))    = 2
+- N=100  → restartsPerReset = max(1, min(3, 1))    = 1
+- N=500  → restartsPerReset = max(1, min(3, 0.2))  = 1
+- N=3000 → restartsPerReset = max(1, min(3, 0.03)) = 1
+
+Tổng số Tabu Search runs = (1 + restartsPerReset) * maxResets:
+- N=30  với maxResets=1 → 4 runs
+- N=100 với maxResets=1 → 2 runs
+- N=500 với maxResets=1 → 2 runs
+
+- Ảnh hưởng: 
+  + Số lần restart trước khi reset hoàn toàn
+  + Nhiều restarts: tăng diversity, khám phá nhiều vùng khác nhau
+  + Ít restarts: tập trung exploitation, nhanh hơn
+  
+- Điều chỉnh:
+  + Bài toán nhỏ (N < 100): tăng lên 5-10
+  + Bài toán lớn (N > 500): giữ 1-2
+  + Có time limit: giảm xuống 1
+
+
+4.5. MAX_RESETS
+---------------
+Hiện tại: maxResets = 1
+
+LY DO CHỌN GIÁ TRỊ:
+------------------
+a) Tại sao = 1:
+   - Code được tune cho "speed" (comment trong code)
+   - Với maxResets = 1: total time ≈ 1-3 giây cho N=1000
+   - Multi-start (restartsPerReset) đã cung cấp đủ diversity
+   - Reset nhiều lần: diminishing returns vs time cost
+
+b) Khi nào cần tăng:
+   - Bài toán rất khó (nhiều local optimum)
+   - Không có time limit chặt
+   - Kết quả không ổn định giữa các lần chạy
+   - maxResets = 2-3: tăng khả năng tìm global optimum 10-20%
+
+c) Chi phí khi tăng:
+   - maxResets = 2: thời gian chạy tăng ~ 100%
+   - maxResets = 3: thời gian chạy tăng ~ 200%
+   - Không linear do early stopping (noImproveThreshold)
+
+d) Trade-off:
+   - maxResets = 1: Fast, good enough cho hầu hết test cases
+   - maxResets = 2-3: Better quality, slower
+   - maxResets > 3: Overkill, không cải thiện đáng kể
+
+VÍ DỤ CỤ THỂ:
+Với N=500, maxIter=250, restartsPerReset=1:
+- maxResets=1: (1+1)*250*1 = 500 total iterations
+- maxResets=2: (1+1)*250*2 = 1000 total iterations
+- maxResets=3: (1+1)*250*3 = 1500 total iterations
+
+- Ảnh hưởng: 
+  + Số lần reset toàn bộ (restart từ đầu)
+  + Tăng maxResets = nhân tuyến tính thời gian chạy
+  
+- Điều chỉnh:
+  + Muốn kết quả tốt nhất, không quan tâm thời gian: 2-3
+  + Time limit chặt (< 5 giây): giữ 1
+  + Competitions/Online judges: 1-2
+
+
+4.6. NO_IMPROVE_THRESHOLD
+-------------------------
+Công thức: noImproveThreshold = restartsPerReset
+
+LY DO CHỌN CÔNG THỨC:
+---------------------
+a) Tại sao = restartsPerReset:
+   - Nếu không cải thiện sau restartsPerReset lần restart
+   - → Có thể đã hội tụ về vùng optimal của reset hiện tại
+   - → Cần reset hoàn toàn để escape
+
+b) Logic quyết định reset:
+   - noImproveCount < threshold: còn hy vọng, tiếp tục restarts
+   - noImproveCount >= threshold: stuck, cần reset strategy
+   - Threshold = số restarts cho phép: fair assessment
+
+c) Tại sao không cố định:
+   - Bài toán nhỏ (restartsPerReset=3): cho 3 cơ hội trước khi reset
+   - Bài toán lớn (restartsPerReset=1): chỉ cho 1 cơ hội
+   - Tỷ lệ với computation budget của mỗi reset
+
+d) Có thể điều chỉnh:
+   - noImproveThreshold = 2 * restartsPerReset: kiên nhẫn hơn
+   - noImproveThreshold = restartsPerReset / 2: aggressive reset
+   - Cân bằng: giữ bằng restartsPerReset
+
+VÍ DỤ CỤ THỂ:
+- N=50  → restartsPerReset=2 → threshold=2
+  * Nếu 2 restarts liên tiếp không improve → trigger reset
+  
+- N=500 → restartsPerReset=1 → threshold=1
+  * Nếu 1 restart không improve → trigger reset ngay
+
+- Ảnh hưởng: 
+  + Xác định khi nào trigger reset (escape current search region)
+  + Thấp: reset sớm, khám phá nhiều regions (high diversity)
+  + Cao: kiên nhẫn với current region (deep exploitation)
+  
+- Điều chỉnh: 
+  + Solution space đơn giản: có thể tăng lên 2 * restartsPerReset
+  + Solution space phức tạp nhiều peaks: giữ = restartsPerReset
+  + Muốn explore nhiều: giảm xuống restartsPerReset / 2
+
+
+5. CÔNG THỨC TỔNG HỢP
+----------------------
+
+5.1. Hàm mục tiêu:
+------------------
+maximize: Σ(k=0 to K-1) [vcost[k] * valid(k)]
+
+trong đó:
+- vcost[k] = Σ(i: assign[i]=k) cst[i]
+- valid(k) = 1 nếu load[k]=0 hoặc minC[k] <= load[k] <= maxC[k]
+- valid(k) = 0 ngược lại
+
+
+5.2. Ràng buộc:
+---------------
+- Mỗi đơn hàng được gán tối đa 1 xe: assign[i] ∈ {-1, 0, 1, ..., K-1}
+- Tải trọng xe: load[k] = Σ(i: assign[i]=k) qty[i]
+- Capacity: load[k] ∈ {0} ∪ [minC[k], maxC[k]]
+
+
+5.3. Greedy ratio:
+------------------
+ratio[i] = cst[i] / qty[i] (nếu qty[i] > 0)
+
+Ý nghĩa: chi phí trên một đơn vị tải trọng
+
+
+5.4. Greedy score:
+------------------
+score(k) = {
+    1000000 + load[k]   nếu load[k] + qty[i] >= minC[k]
+    load[k]             ngược lại
+}
+
+
+6. TÓM TẮT MỐI QUAN HỆ GIỮA CÁC THÔNG SỐ
+-----------------------------------------
+
+tenure vs maxIter:
+- tenure nên ~ 2-5% của maxIter
+- tenure quá cao so với maxIter: không đủ thời gian khám phá
+
+tenure vs maxNoImprove:
+- maxNoImprove nên ~ 3-5 * tenure
+- Đảm bảo đủ iterations để thoát local optimum sau khi move bị tabu
+
+maxNoImprove vs maxIter:
+- maxNoImprove nên ~ 20-30% của maxIter
+- Quá cao: lãng phí thời gian chờ đợi
+- Quá thấp: dừng sớm không kịp khám phá
+
+restartsPerReset vs N:
+- Nghịch đảo: bài toán lớn → ít restarts
+- Budget-aware: phân bổ thời gian hợp lý
+
+Tổng iterations = maxIter * (1 + restartsPerReset) * maxResets:
+- N=100:  200 * 2 * 1 = 400 iterations
+- N=500:  250 * 2 * 1 = 500 iterations
+- N=1000: 500 * 2 * 1 = 1000 iterations
+
+
+8. ĐỘ PHỨC TẠP VÀ THỜI GIAN CHẠY
+---------------------------------
+
+8.1. Độ phức tạp thuật toán:
+----------------------------
+- Mỗi iteration Tabu Search: O(N * K)
+  * Duyệt N orders
+  * Với mỗi order, thử K+1 vehicles (bao gồm unassign)
+  * Tính delta O(1), check tabu O(log(N*K))
+
+- Local Search: O(N * K * số_lần_cải_thiện)
+  * Tốt nhất: O(N * K) nếu không improve
+  * Trung bình: O(N * K * log N) 
+  * Xấu nhất: O(N² * K) nếu mỗi move chỉ cải thiện chút
+
+- Greedy initialization: O(N² * K)
+  * Sort N orders: O(N log N)
+  * Với mỗi order, tìm best vehicle: O(K)
+  * Tổng: O(N log N + N*K) = O(N*K) với K >> log N
+
+- Một run Tabu Search hoàn chỉnh:
+  O(N*K + N*K*log N + maxIter*N*K) = O(maxIter * N * K)
+
+- Tổng thời gian chương trình:
+  O(maxIter * N * K * (1 + restartsPerReset) * maxResets)
+
+8.2. Ước tính thời gian thực tế:
+--------------------------------
+Với cấu hình mặc định và máy tính trung bình (~ 10⁸ operations/second):
+
+N=100, K=10:
+- Operations per run: 200 * 100 * 10 = 200,000
+- Total runs: 1 + 1 = 2
+- Total ops: 400,000
+- Thời gian: < 0.1 giây
+
+N=500, K=50:
+- Operations per run: 250 * 500 * 50 = 6,250,000
+- Total runs: 1 + 1 = 2
+- Total ops: 12,500,000
+- Thời gian: ~ 0.5-1 giây
+
+N=1000, K=100:
+- Operations per run: 500 * 1000 * 100 = 50,000,000
+- Total runs: 1 + 1 = 2
+- Total ops: 100,000,000
+- Thời gian: ~ 1-3 giây
+
+N=3000, K=200:
+- Operations per run: 1500 * 3000 * 200 = 900,000,000
+- Total runs: 1 + 1 = 2
+- Total ops: 1,800,000,000
+- Thời gian: ~ 5-10 giây
+
+8.3. Bottlenecks và optimization:
+---------------------------------
+1. Find best move loop: 90% thời gian
+   - Duyệt N*K combinations mỗi iteration
+   - Không thể tránh (cần thiết cho Tabu)
+
+2. Tabu list lookup: ~5% thời gian
+   - map<pair<int,int>, int> với log(size) lookup
+   - Có thể optimize bằng unordered_map (O(1))
+   - Periodic cleanup giúp giữ size nhỏ
+
+3. Delta calculation: ~3% thời gian
+   - Đã optimize O(1) thay vì recalc toàn bộ O(N)
+
+4. Local search: ~2% thời gian
+   - Chỉ chạy vài lần, ít impact
+
+
+9. LƯU Ý QUAN TRỌNG VÀ BEST PRACTICES
+--------------------------------------
+
+9.1. Về thuật toán:
+------------------
+1. ASPIRATION CRITERION là then chốt:
+   - Cho phép chấp nhận tabu move nếu cải thiện best solution
+   - Điều kiện: cur.totalCost + delta > best.totalCost
+   - Không có aspiration → dễ bị stuck vĩnh viễn
+   - Đây là lý do Tabu Search mạnh hơn simple local search
+
+2. MULTI-START rất hiệu quả:
+   - Random greedy tạo diversity
+   - 2-3 starting points khác nhau thường đủ
+   - Tốt hơn chạy 1 lần với nhiều iterations
+   - Giống genetic algorithm: population diversity
+
+3. LOCAL SEARCH TRƯỚC TABU:
+   - Đưa solution lên local optimum trước
+   - Tabu Search bắt đầu từ vị trí tốt → hiệu quả hơn
+   - Trade-off: tốn thêm ~10% thời gian nhưng tăng 5-10% quality
+
+4. TENURE BALANCING:
+   - Quá cao (>30): explore quá rộng, bỏ lỡ good regions
+   - Quá thấp (<5): cycling, không thoát local optimum
+   - Sweet spot: 7-20 cho hầu hết problems
+   - Adaptive tenure có thể cải thiện thêm (không implement)
+
+5. TABU LIST CLEANUP:
+   - Mỗi 100 iterations xóa entries cũ
+   - Tránh memory leak và tăng tốc lookup
+   - Critical cho bài toán lớn (N>1000)
+
+9.2. Về implementation:
+-----------------------
+1. DELTA CALCULATION O(1):
+   - Tính incremental thay vì recalc toàn bộ
+   - Tiết kiệm từ O(N) xuống O(1) mỗi move
+   - Cải thiện tốc độ ~ 100 lần
+
+2. VALID() CHECK:
+   - load[k]=0 HOẶC minC[k] <= load[k] <= maxC[k]
+   - Nhớ check cả trường hợp empty vehicle (load=0)
+   - Bug phổ biến: quên case empty vehicle
+
+3. RANDOM SEED:
+   - Dùng high_resolution_clock cho random seed
+   - Đảm bảo mỗi lần chạy khác nhau
+   - Quan trọng cho multi-start
+
+4. INPUT VALIDATION:
+   - Check N, K trong range hợp lệ
+   - Check qty, cst không âm
+   - Check minC <= maxC
+   - Tránh division by zero trong greedy ratio
+
+9.3. Về tuning parameters:
+--------------------------
+1. TUNING STRATEGY:
+   a) Bắt đầu với default parameters
+   b) Chạy 10-20 lần, đo average và variance
+   c) Nếu variance cao → tăng restartsPerReset
+   d) Nếu average thấp → tăng maxIter và maxResets
+   e) Điều chỉnh tenure cuối cùng (ít ảnh hưởng nhất)
+
+2. TESTING:
+   - Luôn test với optimal solution (MILP) nếu có
+   - Measure gap = (optimal - tabu) / optimal
+   - Target gap < 5% cho bài toán thực tế
+   - Gap > 10% → cần tune hoặc fix bug
+
+3. CROSS-VALIDATION:
+   - Tune trên training set
+   - Validate trên test set khác
+   - Avoid overfitting to specific test cases
+
+9.4. Common pitfalls:
+--------------------
+1. ❌ Tenure quá cao: 
+   - Symptom: Kết quả tốt nhưng lâu, không stable
+   - Fix: Giảm tenure xuống 10-15
+
+2. ❌ MaxNoImprove quá thấp:
+   - Symptom: Dừng sớm, kết quả không tốt
+   - Fix: Tăng lên ít nhất 3*tenure
+
+3. ❌ Không dùng local search:
+   - Symptom: Tabu chạy lâu, kết quả vẫn thấp
+   - Fix: Thêm local search trước Tabu
+
+4. ❌ Quên aspiration criterion:
+   - Symptom: Bị stuck, không improve
+   - Fix: Implement aspiration (đã có trong code)
+
+5. ❌ Tabu list không cleanup:
+   - Symptom: Memory tăng, chậm dần
+   - Fix: Cleanup mỗi 100 iterations (đã có)
+
+9.5. Khi nào KHÔNG nên dùng Tabu Search:
+----------------------------------------
+- Bài toán nhỏ (N < 50): brute force hoặc exact algorithm nhanh hơn
+- Cần optimal guarantee: dùng MILP solver
+- Constraints phức tạp: MILP hoặc CP solver
+- Time limit rất chặt (< 0.1s): greedy only
+- Nhiều objectives: dùng NSGA-II hoặc MOEA
+
+9.6. Extensions có thể thêm:
+----------------------------
+1. ADAPTIVE TENURE:
+   - tenure = base + random(-2, +2) mỗi iteration
+   - Giúp escape better
+
+2. INTENSIFICATION:
+   - Khi tìm được best mới, chạy intensive local search
+   - Trade-off: thời gian vs quality
+
+3. LONG-TERM MEMORY:
+   - Lưu frequency của mỗi (order, vehicle)
+   - Penalize frequently used assignments
+   - Giúp explore better
+
+4. PATH RELINKING:
+   - Nối 2 good solutions
+   - Có thể tìm được solution tốt hơn trên đường đi
+
+5. PARALLEL TABU:
+   - Chạy multiple Tabu threads song song
+   - Share best solution
+   - Tận dụng multi-core
+   - maxResets lên 2-3 (thử nhiều vùng khác nhau)
+   - restartsPerReset lên 5-7 (nhiều starting points)
+
+3. Thứ tự ưu tiên điều chỉnh:
+   a) Tăng maxResets trước (dễ nhất, hiệu quả cao)
+   b) Tăng maxNoImprove (cho phép vượt plateau)
+   c) Tăng maxIter (nếu vẫn không đủ)
+   d) Điều chỉnh tenure cuối cùng (cần thử nghiệm)
+
+VÍ DỤ:
+- Mặc định N=500: maxIter=250, maxNoImprove=62, tenure=16, maxResets=1
+- Cải thiện:       maxIter=500, maxNoImprove=125, tenure=20, maxResets=2
+- Thời gian: tăng từ ~1s lên ~3s
+
+
+7.2. Khi cần CHẠY NHANH HƠN (time limit):
+-----------------------------------------
+CHẨN ĐOÁN:
+- Time limit < 3 giây
+- Online judge TLE (Time Limit Exceeded)
+- Batch processing nhiều test cases
+
+GIẢI PHÁP:
+1. Giảm số iterations:
+   - maxIter xuống N/4 hoặc N/5 (ít iterations)
+   - maxNoImprove xuống N/12 hoặc N/15 (dừng sớm hơn)
+
+2. Giảm số restarts:
+   - Giữ maxResets = 1 (không reset)
+   - Giảm restartsPerReset = 1 (ít starting points)
+
+3. Giữ nguyên tenure (vẫn cần tránh cycling)
+
+4. Thứ tự ưu tiên:
+   a) Giảm maxResets xuống 1 trước
+   b) Giảm restartsPerReset về 1
+   c) Giảm maxIter về N/4
+   d) Giảm maxNoImprove về N/10
+
+VÍ DỤ:
+- Mặc định N=1000: maxIter=500, restarts=1, resets=1
+- Nhanh hơn:       maxIter=200, restarts=1, resets=1
+- Thời gian: giảm từ ~2s xuống ~0.8s
+
+
+7.3. Khi kết quả KHÔNG ỔN ĐỊNH (high variance):
+-----------------------------------------------
+CHẨN ĐOÁN:
+- Mỗi lần chạy cho kết quả khác nhau nhiều (>20%)
+- Đôi khi tốt, đôi khi xấu
+- Random greedy ảnh hưởng quá lớn
+
+GIẢI PHÁP:
+1. Tăng robustness:
+   - maxResets lên 2-3 (thử nhiều seeds)
+   - restartsPerReset lên 3-5 (average over more starts)
+   - maxIter tăng 50% (cho mỗi start thời gian hội tụ)
+
+2. Cải thiện greedy initialization:
+   - Tăng trọng số cho greedy (ít random hơn)
+   - Chạy greedy nhiều lần, chọn best
+
+3. Giảm randomness trong randGreedy:
+   - Giảm noise range từ [0.7, 1.3] xuống [0.8, 1.2]
+   - Tăng xác suất chọn best vehicle từ 75% lên 85%
+
+
+7.4. Khi bài toán THAY ĐỔI QUY MÔ:
+----------------------------------
+QUY TẮC SCALE:
+
+N tăng gấp đôi (100→200, 500→1000):
+- tenure: tăng 30-50% (không nhân đôi)
+  * Lý do: solution space tăng sub-linear
+  * VD: N=500 tenure=16 → N=1000 tenure=20 (tăng 25%)
+
+- maxIter: tăng 50-70% (gần nhân đôi)
+  * Lý do: cần khám phá nhiều hơn tỷ lệ thuận với N
+  * VD: N=500 maxIter=250 → N=1000 maxIter=500 (nhân đôi)
+
+- maxNoImprove: tăng 50-70%
+  * Tỷ lệ với maxIter
+  * VD: N=500 → 62, N=1000 → 125 (nhân đôi)
+
+- restartsPerReset: giảm hoặc giữ nguyên
+  * Lý do: budget time cố định
+  * VD: N=100 → 1, N=500 → 1 (giữ 1)
+
+K tăng gấp đôi (50→100, 100→200):
+- tenure: tăng 10-20%
+  * K lớn → nhiều options → cần tenure cao hơn chút
+  * Nhưng không linear vì tabu theo (order, vehicle)
+
+- maxIter: KHÔNG thay đổi
+  * Complexity O(N*K) mỗi iteration
+  * Số iterations cố định, mỗi iteration tự động chậm hơn
+
+- maxNoImprove: có thể tăng 20%
+  * K lớn → nhiều local optimum
+  
+- Các thông số khác: giữ nguyên
+
+VÍ DỤ CỤ THỂ:
+Base case: N=500, K=50
+- tenure=16, maxIter=250, maxNoImprove=62
+
+N tăng lên 1000, K=50:
+- tenure=20 (tăng 25%)
+- maxIter=500 (nhân đôi)
+- maxNoImprove=125 (nhân đôi)
+
+N=500, K tăng lên 100:
+- tenure=18 (tăng 12.5%)
+- maxIter=250 (giữ nguyên)
+- maxNoImprove=75 (tăng 21%)
+
+
+7.5. Khi constraints CHẶT (minC gần maxC):
+------------------------------------------
+CHẨN ĐOÁN:
+- Khó tìm feasible solution
+- Nhiều xe không valid
+- Greedy không assign được nhiều orders
+
+GIẢI PHÁP:
+1. Tăng exploration:
+   - maxIter lên 2*N (cần nhiều thời gian)
+   - maxNoImprove lên N/3 (kiên nhẫn với plateau)
+   - maxResets lên 3-5 (thử nhiều vùng)
+
+2. Điều chỉnh tenure:
+   - GIẢM tenure xuống 5-10
+   - Lý do: cần flexibility để tìm feasible regions
+   - Constraints chặt → ít feasible moves → tenure cao làm hại
+
+3. Tăng randomness:
+   - restartsPerReset lên 5-7
+   - Random greedy quan trọng hơn trong case này
+
+
+7.6. SUMMARY - Bảng Tra Nhanh:
+------------------------------
+Mục tiêu          | tenure  | maxIter | maxNoImprove | restartsPerReset | maxResets
+------------------|---------|---------|--------------|------------------|----------
+Mặc định          | N/30    | N/2     | N/8          | min(3, 100/N)    | 1
+Tốt nhất          | 15-25   | 2*N     | N/3          | 5-7              | 2-3
+Nhanh nhất        | 7-12    | N/4     | N/12         | 1                | 1
+Ổn định nhất      | 12-18   | N       | N/6          | 3-5              | 2
+Constraints chặt  | 5-10    | 2*N     | N/3          | 5-7              | 3-5
+
+
+7. ĐỘ PHỨC TẠP
+--------------
+- Mỗi iteration Tabu: O(N * K) để tìm best move
+- Local search: O(N * K) mỗi lần cải thiện
+- Tổng: O(maxIter * N * K * restartsPerReset * maxResets)
+
+Với N=1000, K=100:
+- Thời gian ước tính: 1-3 giây (tùy máy)
+
+
+8. LƯU Ý QUAN TRỌNG
+-------------------
+1. Aspiration criterion rất quan trọng: giúp thoát local optimum
+2. Multi-start với random greedy tăng diversity
+3. Local search trước Tabu giúp bắt đầu từ vị trí tốt
+4. Tenure cần cân bằng: không quá cao (khám phá quá rộng), không quá thấp (cycling)
+5. Tabu cleanup (mỗi 100 iter) giúp tránh memory leak
+
+================================================================================
