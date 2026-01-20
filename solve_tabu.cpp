@@ -492,7 +492,7 @@ int main(int argc, char *argv[])
                 }
             }
         }
-
+        cout << best.totalCost << "\n"; // print total cost
         cout << res.size() << "\n";
         for (auto &p : res)
             cout << p.first << " " << p.second << "\n";
