@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Backtracking.cpp">
+    <ClCompile Include="Random test generator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
