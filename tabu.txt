@@ -233,6 +233,44 @@ Ví dụ với randGreedy:
 3.4. TABU SEARCH (Thành phần chính)
 ------------------------------------
 
+================================================================================
+TÓM TẮT TABU SEARCH - SLIDE OVERVIEW
+================================================================================
+
+Ý TƯỞNG:
+--------
+Cải thiện Local Search bằng cách CHẤP NHẬN MOVE XẤU HƠN để thoát local optimum,
+nhưng CẤM QUAY LẠI vị trí vừa rời (tránh cycling).
+
+CƠ CHẾ:
+-------
+1. TABU LIST: map<{order, vehicle}, expire_iter>
+   - Lưu các REVERSE MOVES bị cấm trong TENURE iterations (7-20)
+
+2. MỖI ITERATION:
+   a) Duyệt tất cả moves (N × K), tính delta = calcDelta(i, fromK, toK)
+   b) Chọn move có DELTA LỚN NHẤT (kể cả delta < 0 - chấp nhận xấu hơn)
+   
+   c) Kiểm tra TABU:
+      - Nếu move BỊ TABU NHƯNG current + delta > best 
+        → CHẤP NHẬN (aspiration - cải thiện best solution)
+      - Nếu move BỊ TABU VÀ không cải thiện best 
+        → BỎ QUA (tabu enforcement)
+   
+   d) Apply move: order i từ fromK → toK
+   
+   e) Update tabu: tabu[{i, fromK}] = iter + tenure
+      → CẤM order i quay lại xe fromK trong tenure iterations tiếp theo
+
+KẾT QUẢ:
+--------
+- Thoát được LOCAL OPTIMUM (khác với Local Search)
+- Khám phá không gian rộng hơn
+- Cải thiện 15-25% so với Greedy + Local Search
+
+================================================================================
+
+
 CÔNG THỨC TÍNH DELTA (calcDelta):
 ---------------------------------
 Khi di chuyển đơn hàng i từ xe fromK → toK:
@@ -253,15 +291,821 @@ Với xe đích (toK):
 - load[k] = 0 HOẶC minC[k] <= load[k] <= maxC[k]
 
 
-CƠ CHẾ TABU:
------------
-- Danh sách tabu lưu: tabu[(order, vehicle)] = iteration khi không còn tabu
-- Khi di chuyển đơn i từ fromK → toK:
-  + Đánh dấu (i, fromK) là tabu trong 'tenure' iterations tiếp theo
+================================================================================
+CƠ CHẾ TABU LIST - PHÂN TÍCH CHI TIẾT
+================================================================================
+
+1. CẤU TRÚC DỮ LIỆU TABU LIST
+------------------------------
+
+1.1. KHAI BÁO:
+--------------
+map<pair<int,int>, int> tabu;
+
+Giải thích:
+- Key: pair<int,int> = (order_id, vehicle_id)
+  * order_id: ID của đơn hàng (0..N-1)
+  * vehicle_id: ID của xe (0..K-1)
   
-- ASPIRATION CRITERION:
-  + Bỏ qua tabu nếu move cải thiện best solution hiện tại
-  + Điều kiện: cur.totalCost + delta > best.totalCost
+- Value: int = iteration khi move KHÔNG CÒN tabu
+  * Không phải iteration khi move BỊ tabu
+  * Mà là iteration khi move được PHÉP trở lại
+  * Công thức: value = iter + tenure
+  
+VÍ DỤ:
+Nếu iter=100, tenure=10:
+- tabu[{5, 3}] = 110
+- Ý nghĩa: Move order 5 VỀ xe 3 bị cấm đến hết iteration 109
+- Từ iteration 110 trở đi: move được phép
+
+
+1.2. TẠI SAO DÙNG map<pair<int,int>, int>?
+-------------------------------------------
+
+LỰA CHỌN 1: map (đang dùng)
+---------------------------
++ Ưu điểm:
+  * Lookup: O(log n) với n = số entries trong tabu list
+  * Insert: O(log n)
+  * Tự động sắp xếp theo key
+  * Dễ iterate và cleanup expired entries
+  * Memory efficient: chỉ lưu entries đang active
+
+- Nhược điểm:
+  * Chậm hơn unordered_map một chút
+  * O(log n) > O(1)
+
+LỰA CHỌN 2: unordered_map (không dùng)
+--------------------------------------
++ Ưu điểm:
+  * Lookup: O(1) average case
+  * Insert: O(1) average case
+  * Nhanh nhất cho lookup
+
+- Nhược điểm:
+  * Cần hash function cho pair<int,int>
+  * Worst case: O(n) khi hash collision
+  * Memory overhead cao hơn
+  * Không dễ iterate theo thứ tự
+
+LỰA CHỌN 3: 2D array tabu[N][K] (không dùng)
+--------------------------------------------
++ Ưu điểm:
+  * Lookup: O(1) - nhanh nhất
+  * Simple implementation
+
+- Nhược điểm:
+  * Memory: O(N*K) luôn, kể cả không dùng
+  * N=1000, K=100: 400KB (4 bytes/int * 100,000)
+  * Cleanup khó: phải duyệt hết N*K cells
+  * Waste memory cho tabu list nhỏ
+
+KẾT LUẬN:
+- Với N, K <= 1000: map là lựa chọn TỐT NHẤT
+- Cân bằng giữa speed, memory, và maintainability
+- Tabu list size thường << N*K → map tiết kiệm memory
+
+
+1.3. KÍCH THƯỚC TABU LIST:
+--------------------------
+
+Tabu list size ĐỘNG (thay đổi theo thời gian):
+- Minimum: 0 (ban đầu)
+- Maximum: tenure * 2 ~ 40 entries (thường xuyên cleanup)
+- Average: ~ tenure = 7-20 entries
+
+LÝ DO:
+- Mỗi iteration thêm TỐI ĐA 1 entry mới (move 1 order)
+- Mỗi entry tồn tại tenure iterations
+- Mỗi 100 iterations: cleanup entries đã expire
+- → Size ổn định quanh tenure
+
+VÍ DỤ:
+tenure = 10, không cleanup:
+- Iteration 0-9: size tăng từ 0 → 10
+- Iteration 10-19: size dao động 9-11
+  * Mỗi iteration: +1 entry mới, -1 entry expire
+- Iteration 100: cleanup → xóa hết entries expire
+- Size sau cleanup: ~ 10 entries (các entries gần đây)
+
+Memory usage:
+- 1 entry = sizeof(pair<int,int>) + sizeof(int) + overhead
+- ≈ 8 + 4 + 16 = 28 bytes (với map overhead)
+- 20 entries ≈ 560 bytes → NEGLIGIBLE
+
+
+2. LOGIC THÊM VÀO TABU LIST
+----------------------------
+
+2.1. KHI NÀO THÊM?
+------------------
+Sau khi APPLY MOVE thành công:
+
+```cpp
+// Tìm best move
+int bestI = -1, bestK = -1;
+double bestDelta = INT_MIN;
+// ... (tìm kiếm) ...
+
+// Apply move
+int fromK = cur.assign[bestI];  // Xe CŨ của order bestI
+cur.move(bestI, bestK);         // Di chuyển sang xe MỚI bestK
+cur.recalcCost();
+
+// THÊM VÀO TABU LIST
+if (fromK >= 0) {  // Nếu order có xe cũ (không phải unassigned)
+    tabu[{bestI, fromK}] = iter + tenure;
+}
+```
+
+
+2.2. TABU CÁI GÌ?
+-----------------
+QUAN TRỌNG: Tabu REVERSE MOVE, không phải FORWARD MOVE
+
+Move thực hiện: order bestI từ fromK → bestK
+Tabu entry: {bestI, fromK} = iter + tenure
+
+Ý NGHĨA:
+- CẤM: Move order bestI VỀ LẠI xe fromK
+- CHO PHÉP: Move order bestI sang xe khác (không phải fromK)
+
+VÍ DỤ:
+Order 5 đang ở xe 2, di chuyển sang xe 7:
+- Move: assign[5]: 2 → 7
+- Tabu: {5, 2} = iter + tenure
+- Sau đó:
+  * Order 5 → xe 2: BỊ CẤM (reverse move)
+  * Order 5 → xe 3: CHO PHÉP (forward move)
+  * Order 5 → xe 7: CHO PHÉP (tại chỗ, skip do fromK==toK)
+  * Order 5 → xe 1: CHO PHÉP (forward move)
+
+
+2.3. TẠI SAO TABU REVERSE, KHÔNG PHẢI FORWARD?
+-----------------------------------------------
+
+PHƯƠNG ÁN 1: Tabu reverse move (đang dùng)
+-------------------------------------------
+Tabu: {order, fromK} - cấm quay lại xe cũ
+
++ Ưu điểm:
+  * Tránh CYCLING: không quay lại ngay solution vừa rời
+  * LINH HOẠT: vẫn có thể move sang bất kỳ xe nào khác
+  * Encourage EXPLORATION: khám phá nhiều xe khác nhau
+  * Phù hợp với Tabu philosophy: "don't go back"
+
+- Nhược điểm:
+  * Có thể bỏ lỡ solution tốt ở gần xe cũ
+  * Nhưng được bù bằng aspiration criterion
+
+PHƯƠNG ÁN 2: Tabu forward move (không dùng)
+--------------------------------------------
+Tabu: {order, toK} - cấm ở xe mới
+
++ Ưu điểm:
+  * Buộc phải di chuyển tiếp
+  * Tăng exploration
+
+- Nhược điểm:
+  * KHÔNG logic: vừa move đến đã cấm ở lại?
+  * Giảm intensification: không khai thác được vùng mới
+  * Solution không stable
+
+PHƯƠNG ÁN 3: Tabu cả order (không dùng)
+----------------------------------------
+Tabu: {order} - cấm move order này
+
++ Ưu điểm:
+  * Đơn giản
+
+- Nhược điểm:
+  * QUÁ CHẶT: loại bỏ N*(K-1) moves chỉ vì 1 move
+  * Giảm flexibility nghiêm trọng
+  * Solution space bị thu hẹp quá mức
+
+KẾT LUẬN:
+REVERSE MOVE tabu là lựa chọn TỐT NHẤT vì:
+1. Tránh cycling hiệu quả
+2. Giữ được flexibility
+3. Chuẩn trong Tabu Search literature
+
+
+2.4. ĐIỀU KIỆN THÊM: fromK >= 0
+-------------------------------
+
+if (fromK >= 0) {
+    tabu[{bestI, fromK}] = iter + tenure;
+}
+
+TẠI SAO CẦN CHECK fromK >= 0?
+- fromK = -1: order bestI CHƯA ĐƯỢC GÁN xe (unassigned)
+- Move từ unassigned → xe k: KHÔNG tabu gì cả
+- Vì không có "xe cũ" để quay lại
+
+VÍ DỤ:
+Order 5 unassigned (-1) → xe 3:
+- fromK = -1: không thêm tabu
+- Lý do: không có reverse move nào để cấm
+- Sau này order 5 có thể bị unassign trở lại mà không vi phạm tabu
+
+
+3. LOGIC KIỂM TRA TABU
+-----------------------
+
+3.1. KHI NÀO KIỂM TRA?
+----------------------
+Khi đang XEM XÉT move order i từ fromK → toK:
+
+```cpp
+for (int i = 0; i < N; i++) {
+    int fromK = cur.assign[i];
+    for (int toK = -1; toK < K; toK++) {
+        if (toK == fromK) continue;
+        
+        // Tính delta
+        double delta = calcDelta(i, fromK, toK);
+        if (delta == INT_MIN) continue;
+        
+        // ========== KIỂM TRA TABU ==========
+        bool isTabu = false;
+        if (tabu.count({i, toK}) && tabu[{i, toK}] > iter) {
+            isTabu = true;
+        }
+        
+        // ========== ASPIRATION CRITERION ==========
+        if (isTabu) {
+            if (cur.totalCost + delta <= best.totalCost) {
+                continue;  // Tabu và không improve best → REJECT
+            }
+            // Nếu improve best → ACCEPT (aspiration)
+        }
+        
+        // Cập nhật best move
+        if (delta > bestDelta) {
+            bestDelta = delta;
+            bestI = i;
+            bestK = toK;
+        }
+    }
+}
+```
+
+
+3.2. ĐIỀU KIỆN TABU:
+--------------------
+isTabu = tabu.count({i, toK}) AND tabu[{i, toK}] > iter
+
+Phân tích:
+1. tabu.count({i, toK}): entry tồn tại trong map?
+   - count() trả về 0 hoặc 1 (map không có duplicate keys)
+   - 0: chưa từng tabu hoặc đã cleanup
+   - 1: có entry trong tabu list
+
+2. tabu[{i, toK}] > iter: entry còn hiệu lực?
+   - tabu[{i, toK}]: iteration khi KHÔNG CÒN tabu
+   - > iter: hiện tại vẫn CÒN trong tenure
+   - <= iter: đã HẾT hạn tabu
+
+VÍ DỤ:
+iter = 105, tenure = 10
+tabu[{3, 5}] = 110
+
+Check move order 3 → xe 5:
+- tabu.count({3, 5}) = 1 ✓ (có entry)
+- tabu[{3, 5}] = 110 > 105 ✓ (còn hiệu lực)
+- → isTabu = TRUE
+- Move BỊ CẤM (trừ khi aspiration)
+
+iter = 111:
+- tabu.count({3, 5}) = 1 ✓ (có entry, chưa cleanup)
+- tabu[{3, 5}] = 110 < 111 ✗ (HẾT hạn)
+- → isTabu = FALSE
+- Move CHO PHÉP
+
+
+3.3. TẠI SAO CẦN CẢ count() VÀ > iter?
+--------------------------------------
+
+CÂU HỎI: Tại sao không chỉ dùng tabu[{i, toK}] > iter?
+TRẢ LỜI: Vì nếu {i, toK} không tồn tại, tabu[{i, toK}] = 0 (default)
+
+CÁCH 1: Dùng cả count() (an toàn, đang dùng)
+--------------------------------------------
+if (tabu.count({i, toK}) && tabu[{i, toK}] > iter) {
+    isTabu = true;
+}
+
+- Nếu entry KHÔNG tồn tại: count()=0 → SHORT-CIRCUIT → không check value
+- Nếu entry TỒN TẠI: count()=1 → check value
+
+CÁCH 2: Chỉ dùng > iter (có vấn đề)
+-----------------------------------
+if (tabu[{i, toK}] > iter) {
+    isTabu = true;
+}
+
+Vấn đề:
+- Nếu {i, toK} chưa có trong map: tabu[{i, toK}] TỰ ĐỘNG TẠO = 0
+- 0 > iter (luôn false): OK, không tabu
+- NHƯNG: map size tăng lên không cần thiết!
+- Sau N*K iterations: map có N*K entries (hầu hết = 0)
+
+CÁCH 3: Dùng find() (tốt nhưng dài dòng)
+----------------------------------------
+auto it = tabu.find({i, toK});
+if (it != tabu.end() && it->second > iter) {
+    isTabu = true;
+}
+
+- Tương đương CÁCH 1 nhưng dài hơn
+- Không tự động tạo entry
+
+KẾT LUẬN:
+- CÁCH 1 (count() + check value): TỐT NHẤT
+- Ngắn gọn, an toàn, không tạo entries thừa
+
+
+4. ASPIRATION CRITERION
+------------------------
+
+4.1. ĐỊNH NGHĨA:
+----------------
+Aspiration Criterion: CHO PHÉP move bị tabu nếu nó CẢI THIỆN best solution
+
+```cpp
+if (isTabu) {
+    if (cur.totalCost + delta <= best.totalCost) {
+        continue;  // REJECT: tabu và không improve best
+    }
+    // Nếu đến đây: tabu NHƯNG improve best → ACCEPT (aspiration)
+}
+```
+
+
+4.2. LOGIC CHI TIẾT:
+--------------------
+Điều kiện REJECT:
+- isTabu = TRUE (move bị cấm)
+- cur.totalCost + delta <= best.totalCost (không cải thiện best)
+- → continue: BỎ QUA move này
+
+Điều kiện ACCEPT (aspiration):
+- isTabu = TRUE (move bị cấm)
+- cur.totalCost + delta > best.totalCost (cải thiện best)
+- → KHÔNG continue: CHẤP NHẬN move này, cập nhật bestDelta
+
+VÍ DỤ:
+best.totalCost = 15000
+cur.totalCost = 14500
+delta = +600
+
+Move order 5 → xe 3:
+- isTabu = TRUE (bị cấm vì vừa rời xe 3)
+- cur + delta = 14500 + 600 = 15100
+- 15100 > 15000 ✓ (improve best)
+- → ASPIRATION: chấp nhận move mặc dù tabu!
+
+
+4.3. TẠI SAO CẦN ASPIRATION?
+-----------------------------
+
+KHÔNG CÓ ASPIRATION:
+Tình huống: Tìm được move rất tốt (improve best) nhưng bị tabu
+→ REJECT move
+→ Bỏ lỡ solution tốt
+→ Có thể KHÔNG BAO GIỜ quay lại vùng đó
+
+VÍ DỤ:
+- Best: 15000
+- Current: 14000 (đang ở local optimum kém)
+- Tìm được move: +2000 → 16000 (new best!)
+- NHƯNG move bị tabu (vừa rời xe đó 5 iterations trước)
+- Không aspiration: REJECT → stuck ở 15000
+- Có aspiration: ACCEPT → best = 16000!
+
+CÓ ASPIRATION:
+→ Luôn ưu tiên solution tốt hơn best
+→ Tabu chỉ để tránh cycling, KHÔNG ngăn improvement
+→ Đây là THEN CHỐT làm Tabu Search mạnh
+
+NGUYÊN TẮC:
+"Tabu list là để tránh quay lại solution XẤU,
+ KHÔNG phải để từ chối solution TỐT!"
+
+
+4.4. VARIANTS CỦA ASPIRATION:
+-----------------------------
+
+VARIANT 1: Improve best (đang dùng)
+-----------------------------------
+if (cur.totalCost + delta > best.totalCost) {
+    // Accept despite tabu
+}
+
++ Ưu điểm:
+  * Đơn giản, rõ ràng
+  * Luôn chấp nhận improvement
+  * Chuẩn trong literature
+
+VARIANT 2: Improve by margin
+-----------------------------
+if (cur.totalCost + delta > best.totalCost + margin) {
+    // Accept despite tabu
+}
+
+- Chặt hơn: chỉ accept nếu improve đáng kể
+- margin: ngưỡng cải thiện tối thiểu
+- Ít dùng: quá conservative
+
+VARIANT 3: Always accept best move
+-----------------------------------
+// Không check tabu, luôn chọn bestDelta
+
+- Không còn là Tabu Search
+- Trở thành Local Search with restart
+
+KẾT LUẬN:
+VARIANT 1 (improve best) là CHUẨN và TỐT NHẤT
+
+
+5. CLEANUP TABU LIST
+--------------------
+
+5.1. MỤC ĐÍCH:
+--------------
+- Xóa entries đã HẾT HẠN (tabu[{i,k}] <= iter)
+- Giảm memory usage
+- Tăng tốc lookup (size nhỏ hơn → log n nhỏ hơn)
+
+
+5.2. CHIẾN LƯỢC CLEANUP:
+------------------------
+
+```cpp
+if (iter % 100 == 0 && tabu.size() > 1000) {
+    for (auto it = tabu.begin(); it != tabu.end(); ) {
+        if (it->second <= iter) {
+            it = tabu.erase(it);  // Xóa và lấy iterator tiếp theo
+        } else {
+            ++it;
+        }
+    }
+}
+```
+
+
+5.3. ĐIỀU KIỆN CLEANUP:
+-----------------------
+
+ĐIỀU KIỆN 1: iter % 100 == 0
+----------------------------
+- Cleanup mỗi 100 iterations
+- KHÔNG cleanup mỗi iteration (quá tốn thời gian)
+- 100 là trade-off giữa cleanup frequency và overhead
+
+TẠI SAO 100?
+- tenure ~ 7-20: mỗi 100 iter có ~ 5-14 tenure cycles
+- Đủ để tích lũy entries expire
+- Không quá thường xuyên (overhead thấp)
+
+ĐIỀU KIỆN 2: tabu.size() > 1000
+-------------------------------
+- Chỉ cleanup khi size LỚN
+- Nếu size nhỏ: cleanup không cần thiết
+
+TẠI SAO 1000?
+- Với tenure ~ 20, bình thường size ~ 20-40
+- Size > 1000 → BẤT THƯỜNG, có vấn đề
+- Có thể do: nhiều moves, tenure cao, hoặc bug
+
+VÍ DỤ BAẤ THƯỜNG:
+- N=1000, tenure=20, iter=10000
+- Lý thuyết: size ~ 20
+- Nếu size=1000 → 980 entries KHÔNG DÙNG
+- Cleanup giải phóng 980 entries
+
+
+5.4. LOGIC ERASE TRONG LOOP:
+-----------------------------
+
+SAI: (undefined behavior)
+-------------------------
+for (auto it = tabu.begin(); it != tabu.end(); ++it) {
+    if (it->second <= iter) {
+        tabu.erase(it);  // it trở thành invalid!
+    }
+}
+// ++it với invalid iterator → CRASH
+
+ĐÚNG: (đang dùng)
+-----------------
+for (auto it = tabu.begin(); it != tabu.end(); ) {
+    if (it->second <= iter) {
+        it = tabu.erase(it);  // erase() trả về iterator tiếp theo
+    } else {
+        ++it;  // Chỉ tăng khi KHÔNG erase
+    }
+}
+
+LƯU Ý:
+- erase(it) trả về iterator sau phần tử bị xóa
+- Không cần ++it sau erase
+- Chỉ ++it khi KHÔNG xóa
+
+
+5.5. ĐỘ PHỨC TẠP CLEANUP:
+-------------------------
+Duyệt: O(size)
+Erase mỗi entry: O(1) amortized (cho map)
+Tổng: O(size) = O(1000) worst case
+
+Thời gian: negligible (~0.01% total time)
+
+
+6. TIMELINE VÍ DỤ CHI TIẾT
+---------------------------
+
+INPUT:
+N=10, K=3, tenure=5, maxIter=20
+
+ITERATION 0: (Init, chưa có tabu)
+----------------------------------
+tabu = {} (empty)
+
+ITERATION 1:
+------------
+Best move: order 2 từ xe 1 → xe 0
+- fromK = 1
+- toK = 0
+- Apply move
+- ADD TABU: tabu[{2, 1}] = 1 + 5 = 6
+
+tabu = {
+  {2, 1}: 6
+}
+
+ITERATION 2:
+------------
+Check move order 2 → xe 1:
+- tabu.count({2, 1}) = 1 ✓
+- tabu[{2, 1}] = 6 > 2 ✓
+- isTabu = TRUE
+- Giả sử delta = +100, cur+delta = 11000, best = 10500
+- 11000 > 10500 → ASPIRATION → ACCEPT
+
+Best move: order 5 từ xe 2 → xe 1
+- ADD TABU: tabu[{5, 2}] = 2 + 5 = 7
+
+tabu = {
+  {2, 1}: 6,
+  {5, 2}: 7
+}
+
+ITERATION 3:
+------------
+Best move: order 7 từ xe 0 → xe 2
+- ADD TABU: tabu[{7, 0}] = 3 + 5 = 8
+
+tabu = {
+  {2, 1}: 6,
+  {5, 2}: 7,
+  {7, 0}: 8
+}
+
+ITERATION 6:
+------------
+Check move order 2 → xe 1:
+- tabu[{2, 1}] = 6 > 6? NO (6 == 6)
+- isTabu = FALSE
+- Move CHO PHÉP (hết hạn tabu)
+
+ITERATION 7:
+------------
+Check move order 5 → xe 2:
+- tabu[{5, 2}] = 7 > 7? NO
+- isTabu = FALSE
+- Move CHO PHÉP
+
+... (tiếp tục) ...
+
+ITERATION 100: (Cleanup)
+-------------------------
+tabu = {
+  {3, 1}: 102,
+  {8, 0}: 104,
+  {1, 2}: 98,  ← expire (98 <= 100)
+  {9, 1}: 95,  ← expire (95 <= 100)
+  {4, 0}: 103
+}
+
+Cleanup:
+- Xóa {1, 2}: 98 <= 100
+- Xóa {9, 1}: 95 <= 100
+
+tabu sau cleanup = {
+  {3, 1}: 102,
+  {8, 0}: 104,
+  {4, 0}: 103
+}
+
+
+7. TÓM TẮT LOGIC HOÀN CHỈNH
+----------------------------
+
+```
+==================== TABU SEARCH ITERATION ====================
+
+FOR iter = 0 TO maxIter:
+    
+    # 1. CLEANUP (mỗi 100 iterations)
+    IF iter % 100 == 0 AND tabu.size() > 1000:
+        FOR each entry in tabu:
+            IF entry.value <= iter:
+                REMOVE entry
+    
+    # 2. TÌM BEST MOVE
+    bestDelta = -∞
+    bestI = -1, bestK = -1
+    
+    FOR order i = 0 TO N-1:
+        fromK = current_vehicle[i]
+        
+        FOR target vehicle toK = -1 TO K-1:
+            IF toK == fromK: SKIP
+            
+            # 2a. Tính delta
+            delta = calcDelta(i, fromK, toK)
+            IF delta == -∞: SKIP  # Vi phạm capacity
+            
+            # 2b. Check tabu
+            isTabu = FALSE
+            IF tabu contains {i, toK} AND tabu[{i, toK}] > iter:
+                isTabu = TRUE
+            
+            # 2c. Aspiration criterion
+            IF isTabu:
+                IF current_cost + delta <= best_cost:
+                    SKIP  # Tabu và không improve best → REJECT
+                # Nếu improve best → tiếp tục (ACCEPT)
+            
+            # 2d. Cập nhật best move
+            IF delta > bestDelta:
+                bestDelta = delta
+                bestI = i
+                bestK = toK
+    
+    # 3. CHECK feasibility
+    IF bestI < 0:
+        noImprove++
+        CONTINUE
+    
+    # 4. APPLY MOVE
+    fromK = current_vehicle[bestI]
+    Move order bestI from fromK to bestK
+    Recalculate cost
+    
+    # 5. ADD TO TABU LIST
+    IF fromK >= 0:  # Nếu có xe cũ
+        tabu[{bestI, fromK}] = iter + tenure
+        # Ý nghĩa: Cấm move order bestI VỀ LẠI xe fromK
+        #          cho đến hết iteration (iter + tenure - 1)
+    
+    # 6. Cập nhật best solution
+    IF current_cost > best_cost:
+        best = current
+        noImprove = 0
+    ELSE:
+        noImprove++
+
+==================== KẾT THÚC ====================
+```
+
+
+8. SO SÁNH VỚI CÁC LOẠI TABU KHÁC
+----------------------------------
+
+8.1. TABU BY ATTRIBUTE (đang dùng)
+----------------------------------
+Tabu: thuộc tính của move (order, vehicle)
+- Cấm (order i, vehicle k) trong tenure iterations
+- Linh hoạt, fine-grained control
+- Chuẩn trong literature
+
+8.2. TABU BY SOLUTION
+---------------------
+Tabu: toàn bộ solution
+- Lưu hash của solution
+- Cấm quay lại solution đã thăm
+- Memory intensive (cần lưu nhiều solutions)
+- Chặt hơn: tránh revisit tốt nhưng giảm flexibility
+
+8.3. RECENCY-BASED TABU
+-----------------------
+Tabu: moves gần đây
+- Giống attribute-based
+- Có thể kết hợp frequency (long-term memory)
+
+8.4. FREQUENCY-BASED (long-term memory)
+---------------------------------------
+Penalty: moves được dùng thường xuyên
+- freq[{i,k}] = số lần move i → k
+- penalty[move] = freq[move] * weight
+- Diversification tốt hơn
+- Phức tạp hơn, không cần thiết cho bài toán này
+
+KẾT LUẬN:
+Attribute-based (đang dùng) là phù hợp nhất cho bài toán này
+
+
+9. PHÂN TÍCH ẢNH HƯỞNG CỦA TENURE
+----------------------------------
+
+9.1. TENURE = 5 (thấp)
+----------------------
++ Ưu điểm:
+  * Linh hoạt: move bị cấm 5 iterations → sớm được phép trở lại
+  * Intensification tốt: khai thác kỹ vùng tốt
+  * Nhanh hội tụ
+
+- Nhược điểm:
+  * DỄ CYCLING: có thể quay lại solution cũ sau 5 moves
+  * Khám phá kém: không thoát xa local optimum
+
+VÍ DỤ CYCLING với tenure=5:
+iter 0: order 3 từ xe 1 → xe 2, tabu[{3,1}]=5
+iter 1-4: các moves khác
+iter 5: order 3 từ xe 2 → xe 1 (CHO PHÉP, hết tabu)
+iter 6: order 3 từ xe 1 → xe 2, tabu[{3,1}]=11
+→ Lặp lại: 1→2→1→2 (CYCLING!)
+
+
+9.2. TENURE = 15 (trung bình)
+-----------------------------
++ Ưu điểm:
+  * Cân bằng tốt intensification vs diversification
+  * Tránh cycling hiệu quả
+  * Khám phá đủ rộng
+
+- Nhược điểm:
+  * Có thể bỏ lỡ solution tốt gần vùng tabu
+
+THƯỜNG LÀ LỰA CHỌN TỐT NHẤT cho N=500-1000
+
+
+9.3. TENURE = 30 (cao)
+----------------------
++ Ưu điểm:
+  * Diversification tốt: khám phá rộng
+  * Chắc chắn tránh cycling
+  * Thoát local optimum mạnh
+
+- Nhược điểm:
+  * QUÁ CHẶT: nhiều moves bị cấm không cần thiết
+  * Giảm intensification: không khai thác tốt vùng promising
+  * Chậm hội tụ
+
+VÍ DỤ VẤN ĐỀ:
+- Tìm được vùng tốt ở iteration 100
+- Muốn quay lại vùng đó ở iteration 110
+- NHƯNG tabu đến iteration 130
+- → Bỏ lỡ 20 iterations khai thác
+
+
+10. KẾT LUẬN VÀ BEST PRACTICES
+-------------------------------
+
+10.1. THIẾT KẾ TABU LIST TỐT:
+-----------------------------
+✓ Dùng map<pair<int,int>, int> (balance speed/memory)
+✓ Tabu reverse moves (tránh cycling, giữ flexibility)
+✓ Lưu iteration khi KHÔNG CÒN tabu (dễ check)
+✓ Cleanup định kỳ (tránh memory leak)
+✓ Aspiration criterion (không bỏ lỡ improvement)
+
+10.2. SAI LẦM THƯỜNG GẶP:
+-------------------------
+✗ Tabu forward moves (giảm intensification)
+✗ Tenure quá cao/thấp (mất cân bằng)
+✗ Quên aspiration (stuck ở local optimum)
+✗ Không cleanup (memory leak)
+✗ Dùng array 2D (waste memory)
+
+10.3. TUNING TENURE:
+-------------------
+- Bắt đầu: tenure = N/30 (công thức default)
+- Test với nhiều N khác nhau
+- Đo variance kết quả (nếu cao → tăng tenure)
+- Đo số lần cycling (nếu có → tăng tenure)
+- Range tốt: [7, 20] cho hầu hết bài toán
+
+10.4. KHI NÀO TABU SEARCH HIỆU QUẢ:
+-----------------------------------
+✓ Bài toán có nhiều local optimum
+✓ Neighborhood size lớn (N*K moves)
+✓ Cần balance exploration/exploitation
+✓ Time limit vừa phải (1-10 giây)
+
+================================================================================
 
 
 QUY TRÌNH TABU SEARCH CHI TIẾT:
