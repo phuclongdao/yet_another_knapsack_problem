@@ -2,10 +2,10 @@ import sys
 import random
 import time
 
-POP_SIZE = 100
+POP_SIZE = 50
 GENERATIONS = 2000
 MUTATION_RATE = 0.1
-PENALTY_WEIGHT = 3200
+PENALTY_WEIGHT = 500
 TIME_LIMIT = 0.9
 
 def calculate_fitness(individual, n, k, d, costs, c1, c2):
