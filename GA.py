@@ -5,7 +5,7 @@ import time
 POP_SIZE = 100
 GENERATIONS = 2000
 MUTATION_RATE = 0.1
-PENALTY_WEIGHT = 500
+PENALTY_WEIGHT = 3200
 TIME_LIMIT = 0.9
 
 def calculate_fitness(individual, n, k, d, costs, c1, c2):
@@ -24,30 +24,79 @@ def calculate_fitness(individual, n, k, d, costs, c1, c2):
             penalty += (loads[i] - c2[i]) * PENALTY_WEIGHT
     return total_cost - penalty
 
-def initialize_population(pop_size, n, k, d, c1, c2):
+def initialize_population(pop_size, n, k, d, costs, c1, c2):
     population = []
-    for _ in range(pop_size):
+    
+    v_by_c1_desc = sorted(range(k), key=lambda x: c1[x], reverse=True)
+    o_by_density = sorted(range(n), key=lambda x: (costs[x]/d[x]) * random.uniform(0.9, 1.1), reverse=True)
+
+    for p_idx in range(pop_size):
         ind = [0] * n
-        order_indices = list(range(n))
-        random.shuffle(order_indices)
         loads = [0] * k
-        for v_idx in range(k):
-            for i in range(len(order_indices) - 1, -1, -1):
-                o_idx = order_indices[i]
-                if loads[v_idx] < c1[v_idx]:
-                    if loads[v_idx] + d[o_idx] <= c2[v_idx]:
-                        ind[o_idx] = v_idx + 1
-                        loads[v_idx] += d[o_idx]
-                        order_indices.pop(i)
+        used = [False] * n
+
+        if p_idx < int(pop_size * 0.4):
+            # random priority
+            v_order = list(range(k))
+            random.shuffle(v_order)
+            
+            order_pool = list(range(n))
+            random.shuffle(order_pool)
+
+            for v_idx in v_order:
+                for o_idx in order_pool:
+                    if not used[o_idx] and loads[v_idx] < c1[v_idx]:
+                        if loads[v_idx] + d[o_idx] <= c2[v_idx]:
+                            ind[o_idx] = v_idx + 1
+                            loads[v_idx] += d[o_idx]
+                            used[o_idx] = True
+
+            for o_idx in order_pool:
+                if not used[o_idx] and random.random() < 0.2:
+                    v_target = random.randint(0, k - 1)
+                    if loads[v_target] + d[o_idx] <= c2[v_target]:
+                        ind[o_idx] = v_target + 1
+                        loads[v_target] += d[o_idx]
+                        used[o_idx] = True
+
+        elif p_idx < int(pop_size * 0.7):
+            # feasible priority
+            heavy_pool = sorted(range(n), key=lambda x: d[x] + random.uniform(-2, 2), reverse=True)
+            
+            for v_idx in v_by_c1_desc:
+                for o_idx in heavy_pool:
+                    if not used[o_idx] and loads[v_idx] < c1[v_idx]:
+                        if loads[v_idx] + d[o_idx] <= c2[v_idx]:
+                            ind[o_idx] = v_idx + 1
+                            loads[v_idx] += d[o_idx]
+                            used[o_idx] = True
+
+            for o_idx in range(n):
+                if not used[o_idx] and random.random() < 0.2:
+                    target_v = random.randint(0, k - 1)
+                    if loads[target_v] + d[o_idx] <= c2[target_v]:
+                        ind[o_idx] = target_v + 1
+                        loads[target_v] += d[o_idx]
+                        used[o_idx] = True
+
+        else:
+            # profit priority
+            for o_idx in o_by_density:
+                best_v = -1
+                underloaded = [v for v in range(k) if loads[v] < c1[v] and loads[v] + d[o_idx] <= c2[v]]
+                
+                if underloaded:
+                    best_v = random.choice(underloaded)
                 else:
-                    break
-        for o_idx in order_indices:
-            if random.random() < 0.2:
-                v_rand = random.randint(0, k)
-                if v_rand > 0:
-                    if loads[v_rand - 1] + d[o_idx] <= c2[v_rand - 1]:
-                        ind[o_idx] = v_rand
-                        loads[v_rand - 1] += d[o_idx]
+                    potential_v = [v for v in range(k) if loads[v] + d[o_idx] <= c2[v]]
+                    if potential_v:
+                        best_v = random.choice(potential_v)
+                
+                if best_v != -1:
+                    ind[o_idx] = best_v + 1
+                    loads[best_v] += d[o_idx]
+                    used[o_idx] = True
+                            
         population.append(ind)
     return population
 
@@ -82,16 +131,13 @@ def solve():
         c1.append(int(input_data[ptr])); ptr += 1
         c2.append(int(input_data[ptr])); ptr += 1
 
-    population = initialize_population(POP_SIZE, N, K, d, c1, c2)
+    population = initialize_population(POP_SIZE, N, K, d, costs, c1, c2)
     scores = [calculate_fitness(ind, N, K, d, costs, c1, c2) for ind in population]
     
     best_ind = None
     best_fit = -float('inf')
 
     for gen in range(GENERATIONS):
-        if time.perf_counter() - start_time > TIME_LIMIT:
-            break
-            
         new_children = []
         while len(new_children) < POP_SIZE:
             p1 = selection(population, scores)
@@ -111,8 +157,10 @@ def solve():
             best_fit = scores[0]
             best_ind = list(population[0])
 
+        if time.perf_counter() - start_time > TIME_LIMIT:
+            break
+
     if best_ind:
-        # print(f"total cost: {best_fit}")
         v_loads = [0] * K
         results = []
         for i in range(N):
@@ -128,6 +176,7 @@ def solve():
                 break
         
         if valid:
+            # print(f"total cost: {best_fit}")
             print(len(results))
             for oid, vid in results:
                 print(f"{oid} {vid}")
