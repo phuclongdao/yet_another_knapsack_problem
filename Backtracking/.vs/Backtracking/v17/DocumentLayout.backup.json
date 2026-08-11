@@ -3,8 +3,8 @@
   "WorkspaceRootPath": "D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Random test generator.cpp||{8B382828-6202-11D1-8870-0000F87579D2}",
-      "RelativeMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|solutionrelative:Random test generator.cpp||{8B382828-6202-11D1-8870-0000F87579D2}"
+      "AbsoluteMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Backtracking.cpp||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{CD06B341-A58F-4144-B46B-1844CA17E4AA}|Backtracking.vcxproj|solutionrelative:Backtracking.cpp||{8B382828-6202-11D1-8870-0000F87579D2}"
     }
   ],
   "DocumentGroupContainers": [
@@ -19,14 +19,14 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
-              "Title": "Random test generator.cpp",
-              "DocumentMoniker": "D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Random test generator.cpp",
-              "RelativeDocumentMoniker": "Random test generator.cpp",
-              "ToolTip": "D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Random test generator.cpp",
-              "RelativeToolTip": "Random test generator.cpp",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAABUAAAAPAAAAAAAAAA==",
+              "Title": "Backtracking.cpp",
+              "DocumentMoniker": "D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Backtracking.cpp",
+              "RelativeDocumentMoniker": "Backtracking.cpp",
+              "ToolTip": "D:\\Long\\Uni\\Optimization\\yet_another_knapsack_problem\\Backtracking\\Backtracking.cpp",
+              "RelativeToolTip": "Backtracking.cpp",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAgwAYAAAAUAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-01-20T00:21:57.05Z",
+              "WhenOpened": "2026-01-20T04:30:14.731Z",
               "EditorCaption": ""
             }
           ]

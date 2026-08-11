@@ -18,8 +18,8 @@ int rand_int(int l, int r) {
 }
 
 int main() {
-    int N = 120;
-    int K = 100;
+    int N = 30;
+    int K = 20;
 
     ofstream fout("test_random.txt");
     if (!fout.is_open()) {
